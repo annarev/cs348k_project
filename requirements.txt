@@ -1,0 +1,3 @@
+waymo-open-dataset-tf-2-6-0
+# Explicit keras 2.6.0 installation needed to avoid "Another metric with the same name already exists" error.
+keras==2.6.0
