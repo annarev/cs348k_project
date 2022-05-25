@@ -11,17 +11,17 @@ VOXEL_SIZE_INV = 1.0 / const.PVCONV_VOXEL_SIZE
 VOXEL_DIM_X = math.ceil((const.X_MAX - const.X_MIN) * VOXEL_SIZE_INV)
 VOXEL_DIM_Y = math.ceil((const.Y_MAX - const.Y_MIN) * VOXEL_SIZE_INV)
 VOXEL_DIM_Z = math.ceil((const.Z_MAX - const.Z_MIN) * VOXEL_SIZE_INV)
+MIN_CORNER = [const.X_MIN, const.Y_MIN, const.Z_MIN]
 
 
 def pts_to_voxel_indexes(pt_coords):
-  min_corner = [const.X_MIN, const.Y_MIN, const.Z_MIN]
-  voxel_idx = (pt_coords - min_corner) * VOXEL_SIZE_INV
+  voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
-  voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
+  # voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
 
 def points_per_voxel(pt_coords, voxel_indexes):
-  pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
+  # pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
   count_features = tf.ones(tf.shape(pt_coords)[:-1])
   # Indexes: 1 x N x 3
   # Features: 1 x N
@@ -63,7 +63,6 @@ class PVConvLayer(tf.keras.layers.Layer):
 
     # Compute means of per-voxel features.
     voxels = voxels * pts_per_voxel_inv
-    voxels = tf.sparse.from_dense(voxels)
     conv_out = self.conv1(voxels)
     conv_out = self.bn_conv1(conv_out, training=training)
     # Use trilinear interpolation to assign point features based on voxel
