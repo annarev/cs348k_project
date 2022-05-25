@@ -1,10 +1,10 @@
-import os
 import tensorflow as tf
+import os
 
 CHECKPOINT_FILE_PATTERN = 'cp-{epoch:02d}.ckpt'
 
 def GetEpochFromCheckpointPath(checkpoint_path):
-  file_name = os.path.basename(path)
+  file_name = os.path.basename(checkpoint_path)
   epoch_str = file_name[len('cp-'):-len('.ckpt')]
   return int(epoch_str)
 

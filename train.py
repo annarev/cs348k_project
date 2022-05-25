@@ -2,6 +2,7 @@ import argparse
 import data
 import constants
 import pointnet
+import pvconvnet
 import os
 
 def train(
@@ -14,6 +15,10 @@ def train(
   if model_name == constants.POINTNET_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pointnet.PointNetModel(constants.NUM_CLASSES, model_cp_dir)
+    model.train(train_dataset, val_dataset, model_tb_dir, epochs)
+  elif model_name == constants.PVCONV_MODEL_NAME:
+    os.makedirs(model_cp_dir, exist_ok=True)
+    model = pvconvnet.PVConvModel(constants.NUM_CLASSES, model_cp_dir)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs)
   else:
     raise NotImplementedError('Model %s is not implemented yet.' % model_name)
