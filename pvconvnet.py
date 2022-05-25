@@ -13,20 +13,20 @@ VOXEL_DIM_Y = math.ceil((const.Y_MAX - const.Y_MIN) * VOXEL_SIZE_INV)
 VOXEL_DIM_Z = math.ceil((const.Z_MAX - const.Z_MIN) * VOXEL_SIZE_INV)
 
 
-def voxel_indexes(pt_coords):
+def pts_to_voxel_indexes(pt_coords):
   min_corner = [const.X_MIN, const.Y_MIN, const.Z_MIN]
   voxel_idx = (pt_coords - min_corner) * VOXEL_SIZE_INV
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
   voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
 
-def points_per_voxel(pt_coords):
+def points_per_voxel(pt_coords, voxel_indexes):
   pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
   count_features = tf.ones(tf.shape(pt_coords)[:-1])
   # Indexes: 1 x N x 3
   # Features: 1 x N
   pts_per_voxel = tf.scatter_nd(
-      voxel_indexes(pt_coords),
+      voxel_indexes,
       count_features, shape=(VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z))
   # TODO: figure out how to keep the batch dimension in the pts_per_voxel above.
   # In our case it doesn't really matter because batch = 1.
@@ -49,15 +49,13 @@ class PVConvLayer(tf.keras.layers.Layer):
     self.mlp.build(input_shape)
     self.conv1.build(input_shape)
 
-  def call(self, inputs, pt_coords, pts_per_voxel_inv, training):
+  def call(self, inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training):
     mlp_out = self.mlp(inputs)
     mlp_out = self.bn_mlp(mlp_out, training=training)
 
-    pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
-    
     # Sum per-point features for each voxel.
     voxels = tf.scatter_nd(
-       voxel_indexes(pt_coords), inputs,
+       voxel_indexes, inputs,
        shape=(VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, inputs.shape[-1]))
     # TODO: figure out how to keep the batch dimension in the pts_per_voxel above.
     # In our case it doesn't really matter because batch = 1.
@@ -65,6 +63,7 @@ class PVConvLayer(tf.keras.layers.Layer):
 
     # Compute means of per-voxel features.
     voxels = voxels * pts_per_voxel_inv
+    voxels = tf.sparse.from_dense(voxels)
     conv_out = self.conv1(voxels)
     conv_out = self.bn_conv1(conv_out, training=training)
     # Use trilinear interpolation to assign point features based on voxel
@@ -92,18 +91,22 @@ class PVConvKerasModel(tf.keras.Model):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     pt_coords = inputs
 
-    # [152,152,13,3], [152,152,13]
-    pts_per_voxel = points_per_voxel(inputs)
+    # Precompute voxel indexes for each points and the number of points per voxel.
+    voxel_indexes = pts_to_voxel_indexes(pt_coords)
+    pts_per_voxel = points_per_voxel(inputs, voxel_indexes)
     pts_per_voxel_inv = tf.math.divide_no_nan(1.0, pts_per_voxel)
 
     #def call(self, inputs, pt_coords, voxel_multipliers, training):
     # Local features shape: 1 x n x 64
     local_features = self.local_pvconv1(
-            inputs, pt_coords, pts_per_voxel_inv, training=training)
+            inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     # to shape 1 x n x 128
-    x = self.pvconv2(local_features, pt_coords, pts_per_voxel_inv, training=training)
+    x = self.pvconv2(
+        local_features, pt_coords, voxel_indexes, pts_per_voxel_inv,
+        training=training)
     # to shape 1 x n x 1024
-    x = self.pvconv3(x, pt_coords, pts_per_voxel_inv, training=training)
+    x = self.pvconv3(
+        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     # 1 x n x 1024 --> 1 x 1 x 1024
     global_features = tf.reduce_max(x, axis=-2, keepdims=True)
     # 1 x 1 x 1024 --> 1 x n x 1024
@@ -111,12 +114,14 @@ class PVConvKerasModel(tf.keras.Model):
     # Concatenate over last dimension: 1024 + 64 = 1088
     x = tf.keras.layers.concatenate([local_features, global_features], axis=-1)
     # to shape 1 x n x 512
-    x = self.pvconv4(x, pt_coords, pts_per_voxel_inv, training=training)
+    x = self.pvconv4(
+        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     # to shape 1 x n x 256
-    x = self.pvconv5(x, pt_coords, pts_per_voxel_inv, training=training)
+    x = self.pvconv5(
+        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     # to shape 1 x n x 128
     local_global_features = self.pvconv6(
-            x, pt_coords, pts_per_voxel_inv, training=training)
+        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     # to 1 x n x num classes
     logits = self.final_mlp(local_global_features)
     return logits
