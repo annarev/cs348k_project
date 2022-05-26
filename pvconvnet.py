@@ -15,7 +15,7 @@ MIN_CORNER = [const.X_MIN, const.Y_MIN, const.Z_MIN]
 
 
 def pts_to_voxel_indexes(pt_coords):
-  voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV
+  voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
   # voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
