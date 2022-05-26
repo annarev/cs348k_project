@@ -22,6 +22,7 @@ class PointNetKerasModel(tf.keras.Model):
     self.final_mlp = tf.keras.layers.Dense(num_classes)
       
 
+  @tf.function
   def call(self, inputs, training=False):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     # Local features shape: 1 x n x 64

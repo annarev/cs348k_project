@@ -14,12 +14,14 @@ VOXEL_DIM_Z = math.ceil((const.Z_MAX - const.Z_MIN) * VOXEL_SIZE_INV)
 MIN_CORNER = [const.X_MIN, const.Y_MIN, const.Z_MIN]
 
 
+@tf.function
 def pts_to_voxel_indexes(pt_coords):
   voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
   # voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
 
+@tf.function
 def points_per_voxel(pt_coords, voxel_indexes):
   # pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
   count_features = tf.ones(tf.shape(pt_coords)[:-1])
@@ -34,21 +36,23 @@ def points_per_voxel(pt_coords, voxel_indexes):
   pts_per_voxel = tf.expand_dims(pts_per_voxel, axis=-1)
   return pts_per_voxel
 
-class PVConvLayer(tf.keras.layers.Layer):
+class PVConvBlock(tf.keras.Model):
   def __init__(self, num_outputs):
-    super(PVConvLayer, self).__init__()
+    super(PVConvBlock, self).__init__()
     self.num_outputs = num_outputs
     self.mlp = tf.keras.layers.Dense(self.num_outputs, activation='relu')
     self.bn_mlp = tf.keras.layers.BatchNormalization()
     self.conv1 = tf.keras.layers.Conv3D(
         filters=self.num_outputs, kernel_size=(3, 3, 3),
-        padding='same', activation='relu')
+        padding='same', activation='relu', data_format='channels_first')
+    self.conv2 = tf.keras.layers.Conv3D(
+        filters=self.num_outputs, kernel_size=(3, 3, 3),
+        padding='same', activation='relu', data_format='channels_first')
+
     self.bn_conv1 = tf.keras.layers.BatchNormalization()
+    self.bn_conv2 = tf.keras.layers.BatchNormalization()
 
-  def build(self, input_shape):
-    self.mlp.build(input_shape)
-    self.conv1.build(input_shape)
-
+  @tf.function
   def call(self, inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training):
     mlp_out = self.mlp(inputs)
     mlp_out = self.bn_mlp(mlp_out, training=training)
@@ -63,8 +67,13 @@ class PVConvLayer(tf.keras.layers.Layer):
 
     # Compute means of per-voxel features.
     voxels = voxels * pts_per_voxel_inv
+    voxels = tf.transpose(voxels, (0, 4, 1, 2, 3))
     conv_out = self.conv1(voxels)
     conv_out = self.bn_conv1(conv_out, training=training)
+    conv_out = self.conv2(conv_out)
+    conv_out = self.bn_conv2(conv_out, training=training)
+    conv_out = tf.transpose(conv_out, (0, 2, 3, 4, 1))
+
     # Use trilinear interpolation to assign point features based on voxel
     # features.
     vox_out = interpolation.trilinear.interpolate(
@@ -77,15 +86,26 @@ class PVConvLayer(tf.keras.layers.Layer):
 class PVConvKerasModel(tf.keras.Model):
   def __init__(self, num_classes=23, channel_mult=0.5):
     super(PVConvKerasModel, self).__init__()
-    self.local_pvconv1 = PVConvLayer(64*channel_mult)
-    self.pvconv2 = PVConvLayer(128*channel_mult)
-    self.pvconv3 = PVConvLayer(1024*channel_mult)
-    self.pvconv4 = PVConvLayer(512*channel_mult)
-    self.pvconv5 = PVConvLayer(256*channel_mult)
-    self.pvconv6 = PVConvLayer(128*channel_mult)
+    self.local_pvconv1 = PVConvBlock(64*channel_mult)
+    self.pvconv2 = PVConvBlock(128*channel_mult)
+    #self.pvconv3 = PVConvBlock(1024*channel_mult)
+    self.mlp3 = tf.keras.layers.Dense(64*channel_mult, activation='relu')
+    self.bn3 = tf.keras.layers.BatchNormalization()
+
+    self.mlp4 = tf.keras.layers.Dense(512, activation='relu')
+    self.bn4 = tf.keras.layers.BatchNormalization()
+    self.mlp5 = tf.keras.layers.Dense(256, activation='relu')
+    self.bn5 = tf.keras.layers.BatchNormalization()
+    self.mlp6 = tf.keras.layers.Dense(128, activation='relu')
+    self.bn6 = tf.keras.layers.BatchNormalization()
+
+    # self.pvconv4 = PVConvBlock(512*channel_mult)
+    # self.pvconv5 = PVConvBlock(256*channel_mult)
+    # self.pvconv6 = PVConvBlock(128*channel_mult)
+
     self.final_mlp = tf.keras.layers.Dense(num_classes)
       
-
+  @tf.function
   def call(self, inputs, training=False):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     pt_coords = inputs
@@ -104,23 +124,37 @@ class PVConvKerasModel(tf.keras.Model):
         local_features, pt_coords, voxel_indexes, pts_per_voxel_inv,
         training=training)
     # to shape 1 x n x 1024
-    x = self.pvconv3(
-        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    # x = self.pvconv3(
+    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    x = self.mlp3(x)
+    x = self.bn3(x, training=training)
     # 1 x n x 1024 --> 1 x 1 x 1024
     global_features = tf.reduce_max(x, axis=-2, keepdims=True)
     # 1 x 1 x 1024 --> 1 x n x 1024
     global_features = tf.tile(global_features, (1, tf.shape(local_features)[1], 1))
     # Concatenate over last dimension: 1024 + 64 = 1088
     x = tf.keras.layers.concatenate([local_features, global_features], axis=-1)
+
     # to shape 1 x n x 512
-    x = self.pvconv4(
-        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    x = self.mlp4(x)
+    x = self.bn4(x, training=training)
     # to shape 1 x n x 256
-    x = self.pvconv5(
-        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    x = self.mlp5(x)
+    x = self.bn5(x, training=training)
     # to shape 1 x n x 128
-    local_global_features = self.pvconv6(
-        x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    local_global_features = self.mlp6(x)
+    local_global_features = self.bn6(local_global_features, training=training)
+
+    # # to shape 1 x n x 512
+    # x = self.pvconv4(
+    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    # # to shape 1 x n x 256
+    # x = self.pvconv5(
+    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    # # to shape 1 x n x 128
+    # local_global_features = self.pvconv6(
+    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+
     # to 1 x n x num classes
     logits = self.final_mlp(local_global_features)
     return logits
