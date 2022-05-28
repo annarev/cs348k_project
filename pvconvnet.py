@@ -1,4 +1,5 @@
 import constants as const
+from enum import Enum
 import math
 import metrics
 import os
@@ -12,6 +13,11 @@ VOXEL_DIM_X = math.ceil((const.X_MAX - const.X_MIN) * VOXEL_SIZE_INV)
 VOXEL_DIM_Y = math.ceil((const.Y_MAX - const.Y_MIN) * VOXEL_SIZE_INV)
 VOXEL_DIM_Z = math.ceil((const.Z_MAX - const.Z_MIN) * VOXEL_SIZE_INV)
 MIN_CORNER = [const.X_MIN, const.Y_MIN, const.Z_MIN]
+
+class SparseType(Enum):
+  DENSE = 0
+  SPARSE_BASIC = 1
+  SPARSE_SYMM = 2
 
 def to_sparse(voxel_grid):
   #voxel_grid = tf.ensure_shape(voxel_grid, (VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, 3))
@@ -31,6 +37,7 @@ def from_sparse(voxel_idx, voxel_features, voxel_grid_shape):
 def coords_to_keys(idx):
     return idx[:, 0] * VOXEL_DIM_X * VOXEL_DIM_Y + idx[:, 1] * VOXEL_DIM_Y + idx[:, 2]
 
+
 @tf.function
 def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
 
@@ -38,14 +45,9 @@ def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
   # We use batch size of 1, so order is based on num pts.
   voxel_idx_order = tf.range(tf.shape(voxel_idx)[-2])
   # Map from voxel indexes to their order in voxel_idx
-  # TODO: convert voxel_idx to single number to use as hash
-  # voxel_idx_to_order = tf.lookup.StaticHashTable(
-  #   tf.lookup.KeyValueTensorInitializer(coords_to_keys(voxel_idx), voxel_idx_order),
-  #   default_value=-1)
   # Only support output size == input size
   out_tensor = tf.zeros([tf.shape(voxel_features)[0], tf.shape(weights)[-1]])
   # For each weight position
-  # For each output, lookup which inputs are non-zero
   for offset_x in range(-1, 2):
     for offset_y in range(-1, 2):
       for offset_z in range(-1, 2):
@@ -57,16 +59,16 @@ def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
         in_voxel_idx = out_voxel_idx + in_offset_from_out
 
         # Only keep input voxel indexes that are in our map.
-        # N x 1, value is -1 if missing
+        # N x 1
         # Gather the inv grid and check non-zero
-        # order = voxel_idx_to_order.lookup(coords_to_keys(in_voxel_idx))
         valid_idx = tf.where(
-            tf.gather_nd(params=pts_per_voxel_inv[0, :, :, :, 0], indices=in_voxel_idx))
+            tf.gather_nd(
+                params=pts_per_voxel_inv[0, :, :, :, 0], indices=in_voxel_idx))
         # Concatenate features for inputs that are available
         # Non zero indexes,
-        # valid_idx = tf.where(tf.math.greater_equal(order, 0))
         input_features = tf.gather_nd(params=voxel_features, indices=valid_idx)
 
+        
         # Matmul input_features with the weight matrix
         # return tf.matmul(input_features, weights[0, 0, 0])
         output_features = tf.matmul(
@@ -75,7 +77,79 @@ def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
         # Output features are added across weights.
         out_tensor = tf.tensor_scatter_nd_add(
             out_tensor, valid_idx, output_features,
-            name='sparseconv_scatter')
+            name='sparseconv_scatter_zero')
+  return out_tensor
+ 
+@tf.function
+def sparse_conv3d_symm(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
+
+  # voxel_idx has shape batch x num pts x coord
+  # We use batch size of 1, so order is based on num pts.
+  voxel_idx_order = tf.range(tf.shape(voxel_idx)[-2])
+  # Map from voxel indexes to their order in voxel_idx
+  # Only support output size == input size
+  out_tensor = tf.zeros([tf.shape(voxel_features)[0], tf.shape(weights)[-1]])
+  # For each weight position
+  for offset_x in range(0, 2):
+    for offset_y in range(0, 2):
+      for offset_z in range(0, 2):
+        out_voxel_idx = voxel_idx
+        in_offset_from_out = tf.constant(
+            [[offset_x, offset_y, offset_z]], dtype=tf.int32)
+
+        # N x I
+        in_voxel_idx = out_voxel_idx + in_offset_from_out
+
+        # Only keep input voxel indexes that are in our map.
+        # N x 1
+        # Gather the inv grid and check non-zero
+        valid_idx = tf.where(
+            tf.gather_nd(
+                params=pts_per_voxel_inv[0, :, :, :, 0], indices=in_voxel_idx))
+        # Concatenate features for inputs that are available
+        # Non zero indexes,
+        input_features = tf.gather_nd(params=voxel_features, indices=valid_idx)
+
+        if offset_x != 0 or offset_y != 0 or offset_z != 0:
+          # N x I
+          neg_in_voxel_idx = out_voxel_idx - in_offset_from_out
+
+          # Only keep input voxel indexes that are in our map.
+          # N x 1
+          # Gather the inv grid and check non-zero
+          neg_valid_idx = tf.where(
+              tf.gather_nd(
+                  params=pts_per_voxel_inv[0, :, :, :, 0],
+                  indices=neg_in_voxel_idx))
+          # Concatenate features for inputs that are available
+          # Non zero indexes,
+          neg_input_features = tf.gather_nd(
+              params=voxel_features, indices=neg_valid_idx)
+          combined_input_features = tf.concatenate(
+              [input_features[tf.newaxis, :, :],
+               neg_input_features[tf.newaxis, :, :]], axis=0)
+          combined_weight = tf.concatenate([
+             weights[tf.newaxis, offset_x + 1, offset_y + 1, offset_z + 1],
+             weights[tf.newaxis, -offset_x + 1, -offset_y + 1, -offset_z + 1]
+          ], axis=0)
+          combined_output_features = tf.matmul(
+              combined_input_features, combined_weights)
+          out_tensor = tf.tensor_scatter_nd_add(
+              out_tensor, valid_idx, combined_output_features[0],
+              name='sparseconv_scatter_pos_idx')
+          out_tensor = tf.tensor_scatter_nd_add(
+              out_tensor, neg_valid_idx, combined_output_features[1],
+              name='sparseconv_scatter_neg_idx')
+        else:
+          # Matmul input_features with the weight matrix
+          # return tf.matmul(input_features, weights[0, 0, 0])
+          output_features = tf.matmul(
+              input_features, weights[offset_x + 1, offset_y + 1, offset_z + 1])
+          # Scatter outputs to their locations in the output.
+          # Output features are added across weights.
+          out_tensor = tf.tensor_scatter_nd_add(
+              out_tensor, valid_idx, output_features,
+              name='sparseconv_scatter_zero')
   return out_tensor
        
 
@@ -103,9 +177,10 @@ def points_per_voxel(pt_coords, voxel_indexes):
 
 
 class SparseConv3D(tf.keras.layers.Layer):
-  def __init__(self, num_outputs):
+  def __init__(self, num_outputs, symm_opt):
     super(SparseConv3D, self).__init__()
     self.num_outputs = num_outputs
+    self.symm_opt = symm_opt
     self.kernel = None
 
   def build(self, input_shape):
@@ -116,9 +191,61 @@ class SparseConv3D(tf.keras.layers.Layer):
     
   def call(self, inputs, voxel_idx, pts_per_voxel_inv):
     # tf.print(tf.reduce_sum(self.kernel[1, 0, 2]))
-    voxels = sparse_conv3d(voxel_idx, inputs, self.kernel, pts_per_voxel_inv)
+    if self.symm_opt:
+      voxels = sparse_conv3d_symm(
+          voxel_idx, inputs, self.kernel, pts_per_voxel_inv)
+    else:
+      voxels = sparse_conv3d(
+          voxel_idx, inputs, self.kernel, pts_per_voxel_inv)
     return tf.keras.layers.ReLU()(voxels)
    
+class PVConvSparseBlock(tf.keras.Model):
+  def __init__(self, num_outputs, symm_opt=True):
+    super(PVConvBlock, self).__init__()
+    self.num_outputs = int(num_outputs)
+    self.mlp = tf.keras.layers.Dense(self.num_outputs, activation='relu')
+    self.bn_mlp = tf.keras.layers.BatchNormalization()
+
+    self.sparseconv1 = SparseConv3D(self.num_outputs, symm_opt)
+    self.sparseconv2 = SparseConv3D(self.num_outputs, symm_opt)
+
+    self.bn = tf.keras.layers.BatchNormalization()
+
+  @tf.function
+  def call(self, inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training):
+    mlp_out = self.mlp(inputs)
+    mlp_out = self.bn_mlp(mlp_out, training=training)
+
+    # Sum per-point features for each voxel.
+    voxels = tf.scatter_nd(
+       voxel_indexes, inputs,
+       shape=(VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, inputs.shape[-1]),
+       name='scatter_to_voxels')
+    voxels = voxels * pts_per_voxel_inv
+    voxel_idx, voxel_features = to_sparse(voxels)
+    # voxel_features = tf.ensure_shape(voxel_features, (None, 3))
+    voxel_idx = tf.ensure_shape(voxel_idx, (None, 3))
+    voxel_features = self.sparseconv1(voxel_features, voxel_idx, pts_per_voxel_inv)
+    voxel_features = self.sparseconv2(voxel_features, voxel_idx, pts_per_voxel_inv)
+    # def from_sparse(voxel_idx, voxel_features, voxel_grid_shape):
+    voxels = from_sparse(
+        voxel_idx, voxel_features,
+        (VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, self.num_outputs))
+
+    # TODO: figure out how to keep the batch dimension in the pts_per_voxel above.
+    # In our case it doesn't really matter because batch = 1.
+    conv_out = tf.expand_dims(voxels, axis=0)
+    conv_out = self.bn(conv_out, training=training)
+
+    # Use trilinear interpolation to assign point features based on voxel
+    # features.
+    vox_out = interpolation.trilinear.interpolate(
+        conv_out,
+        pt_coords)
+    # Fuse per-point MLP and voxel conv outputs using addition.
+    pv_out = mlp_out + vox_out
+    return pv_out
+
 
 class PVConvBlock(tf.keras.Model):
   def __init__(self, num_outputs):
@@ -128,13 +255,10 @@ class PVConvBlock(tf.keras.Model):
     self.bn_mlp = tf.keras.layers.BatchNormalization()
     self.conv1 = tf.keras.layers.Conv3D(
         filters=self.num_outputs, kernel_size=(3, 3, 3),
-        padding='same', activation='relu', data_format='channels_first')
+        padding='same', activation='relu', data_format='channels_last')
     self.conv2 = tf.keras.layers.Conv3D(
         filters=self.num_outputs, kernel_size=(3, 3, 3),
-        padding='same', activation='relu', data_format='channels_first')
-
-    self.sparseconv1 = SparseConv3D(self.num_outputs)
-    self.sparseconv2 = SparseConv3D(self.num_outputs)
+        padding='same', activation='relu', data_format='channels_last')
 
     self.bn_conv1 = tf.keras.layers.BatchNormalization()
     self.bn_conv2 = tf.keras.layers.BatchNormalization()
@@ -149,28 +273,18 @@ class PVConvBlock(tf.keras.Model):
        voxel_indexes, inputs,
        shape=(VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, inputs.shape[-1]),
        name='scatter_to_voxels')
-    voxel_idx, voxel_features = to_sparse(voxels)
-    # voxel_features = tf.ensure_shape(voxel_features, (None, 3))
-    voxel_idx = tf.ensure_shape(voxel_idx, (None, 3))
-    voxel_features = self.sparseconv1(voxel_features, voxel_idx, pts_per_voxel_inv)
-    voxel_features = self.sparseconv2(voxel_features, voxel_idx, pts_per_voxel_inv)
-    # def from_sparse(voxel_idx, voxel_features, voxel_grid_shape):
-    voxels = from_sparse(
-        voxel_idx, voxel_features,
-        (VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, self.num_outputs))
-    # tf.debugging.assert_near(voxels, voxels2, rtol=1e-5)
 
     # TODO: figure out how to keep the batch dimension in the pts_per_voxel above.
     # In our case it doesn't really matter because batch = 1.
     conv_out = tf.expand_dims(voxels, axis=0)
 
     # Compute means of per-voxel features.
-    # voxels = voxels * pts_per_voxel_inv
+    voxels = voxels * pts_per_voxel_inv
     # voxels = tf.transpose(voxels, (0, 4, 1, 2, 3))
-    # conv_out = self.conv1(voxels)
-    # conv_out = self.bn_conv1(conv_out, training=training)
-    # conv_out = self.conv2(conv_out)
-    # conv_out = self.bn_conv2(conv_out, training=training)
+    conv_out = self.conv1(voxels)
+    conv_out = self.bn_conv1(conv_out, training=training)
+    conv_out = self.conv2(conv_out)
+    conv_out = self.bn_conv2(conv_out, training=training)
     # conv_out = tf.transpose(conv_out, (0, 2, 3, 4, 1))
 
     # Use trilinear interpolation to assign point features based on voxel
@@ -182,12 +296,21 @@ class PVConvBlock(tf.keras.Model):
     pv_out = mlp_out + vox_out
     return pv_out
 
+
 class PVConvKerasModel(tf.keras.Model):
-  def __init__(self, num_classes=23, channel_mult=0.5):
+  def __init__(self, num_classes=23, channel_mult=0.5, sparse_type=True):
     super(PVConvKerasModel, self).__init__()
-    self.local_pvconv1 = PVConvBlock(64*channel_mult)
-    self.pvconv2 = PVConvBlock(128*channel_mult)
-    #self.pvconv3 = PVConvBlock(1024*channel_mult)
+
+    if sparse_type == SparseType.SPARSE_BASIC:
+      self.local_pvconv1 = PVConvSparseBlock(64*channel_mult, symm_opt=False)
+      self.pvconv2 = PVConvSparseBlock(128*channel_mult, symm_opt=False)
+    elif sparse_type == SparseType.SPARSE_SYMM:
+      self.local_pvconv1 = PVConvSparseBlock(64*channel_mult)
+      self.pvconv2 = PVConvSparseBlock(128*channel_mult)
+    else:
+      self.local_pvconv1 = PVConvBlock(64*channel_mult)
+      self.pvconv2 = PVConvBlock(128*channel_mult)
+
     self.mlp3 = tf.keras.layers.Dense(64*channel_mult, activation='relu')
     self.bn3 = tf.keras.layers.BatchNormalization()
 
@@ -198,10 +321,6 @@ class PVConvKerasModel(tf.keras.Model):
     self.mlp6 = tf.keras.layers.Dense(128, activation='relu')
     self.bn6 = tf.keras.layers.BatchNormalization()
 
-    # self.pvconv4 = PVConvBlock(512*channel_mult)
-    # self.pvconv5 = PVConvBlock(256*channel_mult)
-    # self.pvconv6 = PVConvBlock(128*channel_mult)
-
     self.final_mlp = tf.keras.layers.Dense(num_classes)
       
   @tf.function
@@ -209,14 +328,13 @@ class PVConvKerasModel(tf.keras.Model):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     pt_coords = inputs
 
-    # Precompute voxel indexes for each points and the number of points per voxel.
+    # Precompute voxel indexes for each point and the number of points per voxel.
     voxel_indexes = pts_to_voxel_indexes(pt_coords)
     pts_per_voxel = points_per_voxel(inputs, voxel_indexes)
     pts_per_voxel = tf.ensure_shape(
         pts_per_voxel, (1, VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, 1))
     pts_per_voxel_inv = tf.math.divide_no_nan(1.0, pts_per_voxel)
 
-    #def call(self, inputs, pt_coords, voxel_multipliers, training):
     # Local features shape: 1 x n x 64
     local_features = self.local_pvconv1(
             inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
@@ -246,25 +364,16 @@ class PVConvKerasModel(tf.keras.Model):
     local_global_features = self.mlp6(x)
     local_global_features = self.bn6(local_global_features, training=training)
 
-    # # to shape 1 x n x 512
-    # x = self.pvconv4(
-    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
-    # # to shape 1 x n x 256
-    # x = self.pvconv5(
-    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
-    # # to shape 1 x n x 128
-    # local_global_features = self.pvconv6(
-    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
-
     # to 1 x n x num classes
     logits = self.final_mlp(local_global_features)
     return logits
 
 
 class PVConvModel:
-  def __init__(self, num_classes: int, checkpoint_dir: str):
+  def __init__(self, num_classes: int, sparse_type: SparseType,
+      checkpoint_dir: str):
     self.checkpoint_dir = checkpoint_dir
-    self.model = PVConvKerasModel(num_classes)
+    self.model = PVConvKerasModel(num_classes, sparse_type)
     loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     self.model.compile(optimizer='adam',
         loss=loss_fn,
@@ -274,7 +383,7 @@ class PVConvModel:
 
   def train(
       self, train_dataset: tf.data.Dataset, val_dataset: tf.data.Dataset,
-      tensorboard_dir: str, epochs: int):
+      tensorboard_dir: str, epochs: int, steps_per_epoch: int):
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=tensorboard_dir)
     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
         filepath=os.path.join(self.checkpoint_dir, util.CHECKPOINT_FILE_PATTERN),
@@ -283,7 +392,8 @@ class PVConvModel:
     self.model.fit(
         train_dataset, epochs=epochs, # validation_data=val_dataset,
         callbacks=[tensorboard_callback, checkpoint_callback, metrics.ToggleMetrics()],
-        initial_epoch=self.epoch)
+        initial_epoch=self.epoch,
+        steps_per_epoch=steps_per_epoch)
 
   def predict(self, x: tf.Tensor) -> tf.Tensor:
     return self.model(x)

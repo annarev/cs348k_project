@@ -3,6 +3,8 @@ import data
 import constants
 import numpy as np
 import os
+import pointnet
+import pvconvnet
 import time
 
 def example_eval(model, x, y):
@@ -19,6 +21,7 @@ def eval_model(model, dataset):
   count = 0
   for x, y in dataset:
     time_sum += example_eval(model, x, y)
+    count += 1
 
   time_avg = time_sum / count
   print('Avg time: %.5fs' % time_avg)
@@ -38,7 +41,8 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(
       description='Evaluate a point cloud semseg model.')
   parser.add_argument(
-      '--model', type=str, choices=MODELS, help='Type of model to train.')
+      '--model', type=str, choices=constants.MODELS,
+      help='Type of model to train.')
   parser.add_argument(
       '--checkpoint_dir', type=str, default='~/checkpoint',
       help='Directory for reading checkpoints.')
