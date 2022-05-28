@@ -67,7 +67,7 @@ class PointNetModel:
 
   def train(
       self, train_dataset: tf.data.Dataset, val_dataset: tf.data.Dataset,
-      tensorboard_dir: str, epochs: int):
+      tensorboard_dir: str, epochs: int, steps_per_epoch: int):
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=tensorboard_dir)
     checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
         filepath=os.path.join(self.checkpoint_dir, util.CHECKPOINT_FILE_PATTERN),
@@ -76,7 +76,8 @@ class PointNetModel:
     self.model.fit(
         train_dataset, epochs=epochs, # validation_data=val_dataset,
         callbacks=[tensorboard_callback, checkpoint_callback, metrics.ToggleMetrics()],
-        initial_epoch=self.epoch)
+        initial_epoch=self.epoch,
+        steps_per_epoch=steps_per_epoch)
 
   def predict(self, x: tf.Tensor) -> tf.Tensor:
     return self.model(x)

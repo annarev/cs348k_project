@@ -20,19 +20,19 @@ def train(
   elif model_name == constants.PVCONV_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
-        constants.NUM_CLASSES, sparse_type=pvconvnet.SparseType.DENSE,
+        constants.NUM_CLASSES, pvconvnet.SparseType.DENSE,
         model_cp_dir)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   elif model_name == constants.PVCONV_SPARSE_BASIC_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
-        constants.NUM_CLASSES, sparse_type=pvconvnet.SparseType.SPARSE_BASIC,
+        constants.NUM_CLASSES, pvconvnet.SparseType.SPARSE_BASIC,
         model_cp_dir)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   elif model_name == constants.PVCONV_SPARSE_SYMM_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
-        constants.NUM_CLASSES, sparse_type=pvconvnet.SparseType.SPARSE_SYMM,
+        constants.NUM_CLASSES, pvconvnet.SparseType.SPARSE_SYMM,
         model_cp_dir)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   else:
@@ -53,7 +53,7 @@ if __name__ == '__main__':
       '--checkpoint_dir', type=str, default='~/checkpoint',
       help='Directory for storing checkpoints.')
   parser.add_argument(
-      '--steps_per_epoch', type=int, default=1000,
+      '--steps_per_epoch', type=int, default=100,
       help='Steps per epoch.')
   args = parser.parse_args()
   train(

@@ -125,15 +125,15 @@ def sparse_conv3d_symm(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
           # Non zero indexes,
           neg_input_features = tf.gather_nd(
               params=voxel_features, indices=neg_valid_idx)
-          combined_input_features = tf.concatenate(
+          combined_input_features = tf.keras.layers.concatenate(
               [input_features[tf.newaxis, :, :],
                neg_input_features[tf.newaxis, :, :]], axis=0)
-          combined_weight = tf.concatenate([
+          combined_weight = tf.keras.layers.concatenate([
              weights[tf.newaxis, offset_x + 1, offset_y + 1, offset_z + 1],
              weights[tf.newaxis, -offset_x + 1, -offset_y + 1, -offset_z + 1]
           ], axis=0)
           combined_output_features = tf.matmul(
-              combined_input_features, combined_weights)
+              combined_input_features, combined_weight)
           out_tensor = tf.tensor_scatter_nd_add(
               out_tensor, valid_idx, combined_output_features[0],
               name='sparseconv_scatter_pos_idx')
@@ -201,7 +201,7 @@ class SparseConv3D(tf.keras.layers.Layer):
    
 class PVConvSparseBlock(tf.keras.Model):
   def __init__(self, num_outputs, symm_opt=True):
-    super(PVConvBlock, self).__init__()
+    super(PVConvSparseBlock, self).__init__()
     self.num_outputs = int(num_outputs)
     self.mlp = tf.keras.layers.Dense(self.num_outputs, activation='relu')
     self.bn_mlp = tf.keras.layers.BatchNormalization()
@@ -221,7 +221,7 @@ class PVConvSparseBlock(tf.keras.Model):
        voxel_indexes, inputs,
        shape=(VOXEL_DIM_X, VOXEL_DIM_Y, VOXEL_DIM_Z, inputs.shape[-1]),
        name='scatter_to_voxels')
-    voxels = voxels * pts_per_voxel_inv
+    voxels = voxels * pts_per_voxel_inv[0]
     voxel_idx, voxel_features = to_sparse(voxels)
     # voxel_features = tf.ensure_shape(voxel_features, (None, 3))
     voxel_idx = tf.ensure_shape(voxel_idx, (None, 3))
@@ -298,7 +298,7 @@ class PVConvBlock(tf.keras.Model):
 
 
 class PVConvKerasModel(tf.keras.Model):
-  def __init__(self, num_classes=23, channel_mult=0.5, sparse_type=True):
+  def __init__(self, num_classes=23, sparse_type=True, channel_mult=0.5):
     super(PVConvKerasModel, self).__init__()
 
     if sparse_type == SparseType.SPARSE_BASIC:
