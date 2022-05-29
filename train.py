@@ -15,25 +15,26 @@ def train(
 
   if model_name == constants.POINTNET_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
-    model = pointnet.PointNetModel(constants.NUM_CLASSES, model_cp_dir)
+    model = pointnet.PointNetModel(
+        constants.NUM_CLASSES, model_cp_dir, iou_only_epoch=True)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   elif model_name == constants.PVCONV_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
         constants.NUM_CLASSES, pvconvnet.SparseType.DENSE,
-        model_cp_dir)
+        model_cp_dir, iou_only_epoch=True)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   elif model_name == constants.PVCONV_SPARSE_BASIC_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
         constants.NUM_CLASSES, pvconvnet.SparseType.SPARSE_BASIC,
-        model_cp_dir)
+        model_cp_dir, iou_only_epoch=True)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   elif model_name == constants.PVCONV_SPARSE_SYMM_MODEL_NAME:
     os.makedirs(model_cp_dir, exist_ok=True)
     model = pvconvnet.PVConvModel(
         constants.NUM_CLASSES, pvconvnet.SparseType.SPARSE_SYMM,
-        model_cp_dir)
+        model_cp_dir, iou_only_epoch=True)
     model.train(train_dataset, val_dataset, model_tb_dir, epochs, steps_per_epoch)
   else:
     raise NotImplementedError('Model %s is not implemented yet.' % model_name)

@@ -1,12 +1,15 @@
 import tensorflow as tf
 
+
+
 class MeanIOUFromLogits(tf.keras.metrics.MeanIoU):
-  def __init__(self, **kwargs):
+  def __init__(self, only_epoch, **kwargs):
     super(MeanIOUFromLogits, self).__init__(**kwargs)
+    self.only_epoch = only_epoch
     self.update_metric = tf.Variable(False)    
   
   def update_state(self, y_true, y_pred, sample_weight=None):
-    if self.update_metric:
+    if not self.only_epoch or self.update_metric:
       pred_label = tf.argmax(y_pred, axis=-1)
       super().update_state(y_true, pred_label, sample_weight)
 

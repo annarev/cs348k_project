@@ -11,7 +11,9 @@ class PointNetKerasModel(tf.keras.Model):
     self.bn1 = tf.keras.layers.BatchNormalization()
     self.mlp2 = tf.keras.layers.Dense(128, activation='relu')
     self.bn2 = tf.keras.layers.BatchNormalization()
-    self.mlp3 = tf.keras.layers.Dense(1024, activation='relu')
+    # 1024 causes OOM, so using 512 instead below.
+    # self.mlp3 = tf.keras.layers.Dense(1024, activation='relu')
+    self.mlp3 = tf.keras.layers.Dense(512, activation='relu')
     self.bn3 = tf.keras.layers.BatchNormalization()
     self.mlp4 = tf.keras.layers.Dense(512, activation='relu')
     self.bn4 = tf.keras.layers.BatchNormalization()
@@ -22,11 +24,12 @@ class PointNetKerasModel(tf.keras.Model):
     self.final_mlp = tf.keras.layers.Dense(num_classes)
       
 
-  @tf.function
+  @tf.function(experimental_relax_shapes=True)
   def call(self, inputs, training=False):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     # Local features shape: 1 x n x 64
     local_features = self.local_mlp1(inputs)
+    local_features = tf.ensure_shape(local_features, (1, None, 64))
     local_features = self.bn1(local_features, training=training)
     # to shape 1 x n x 128
     x = self.mlp2(local_features)
@@ -53,16 +56,15 @@ class PointNetKerasModel(tf.keras.Model):
     logits = self.final_mlp(local_global_features)
     return logits
 
-
 class PointNetModel:
-  def __init__(self, num_classes: int, checkpoint_dir: str):
+  def __init__(self, num_classes: int, checkpoint_dir: str, iou_only_epoch: bool):
     self.checkpoint_dir = checkpoint_dir
     self.model = PointNetKerasModel(num_classes)
     loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     self.model.compile(optimizer='adam',
         loss=loss_fn,
         metrics = [metrics.MeanIOUFromLogits(
-                   num_classes=num_classes)])
+                   num_classes=num_classes, only_epoch=iou_only_epoch)])
     self.epoch = util.LoadLatestCheckpoint(self.model, checkpoint_dir)
 
   def train(
@@ -82,9 +84,8 @@ class PointNetModel:
   def predict(self, x: tf.Tensor) -> tf.Tensor:
     return self.model(x)
 
-  def eval(self, dataset: tf.data.Dataset) -> List[float]:
+  def eval(self, dataset: tf.data.Dataset, steps: int) -> List[float]:
     """Compute IOU for the dataset."""
-    metrics = self.model.evaluate(dataset)
-    print(self.model.metric_names)
+    metrics = self.model.evaluate(dataset, steps=steps)
     return metrics[1:]  # skip loss and only keep iou?
 

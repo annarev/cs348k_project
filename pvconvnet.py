@@ -6,6 +6,7 @@ import os
 import tensorflow as tf
 from tensorflow_graphics.math import interpolation
 from typing import List
+import queue
 import util
 
 VOXEL_SIZE_INV = 1.0 / const.PVCONV_VOXEL_SIZE
@@ -38,12 +39,11 @@ def coords_to_keys(idx):
     return idx[:, 0] * VOXEL_DIM_X * VOXEL_DIM_Y + idx[:, 1] * VOXEL_DIM_Y + idx[:, 2]
 
 
-@tf.function
+# Would be nice to pass jit_compile, but need to figure out how to remove
+# the 'where' call below.
+@tf.function(experimental_relax_shapes=True)
 def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
 
-  # voxel_idx has shape batch x num pts x coord
-  # We use batch size of 1, so order is based on num pts.
-  voxel_idx_order = tf.range(tf.shape(voxel_idx)[-2])
   # Map from voxel indexes to their order in voxel_idx
   # Only support output size == input size
   out_tensor = tf.zeros([tf.shape(voxel_features)[0], tf.shape(weights)[-1]])
@@ -80,12 +80,9 @@ def sparse_conv3d(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
             name='sparseconv_scatter_zero')
   return out_tensor
  
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def sparse_conv3d_symm(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
 
-  # voxel_idx has shape batch x num pts x coord
-  # We use batch size of 1, so order is based on num pts.
-  voxel_idx_order = tf.range(tf.shape(voxel_idx)[-2])
   # Map from voxel indexes to their order in voxel_idx
   # Only support output size == input size
   out_tensor = tf.zeros([tf.shape(voxel_features)[0], tf.shape(weights)[-1]])
@@ -153,14 +150,14 @@ def sparse_conv3d_symm(voxel_idx, voxel_features, weights, pts_per_voxel_inv):
   return out_tensor
        
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def pts_to_voxel_indexes(pt_coords):
   voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
   # voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def points_per_voxel(pt_coords, voxel_indexes):
   # pt_coords = tf.ensure_shape(pt_coords, (1, None, 3))
   count_features = tf.ones(tf.shape(pt_coords)[:-1])
@@ -211,7 +208,7 @@ class PVConvSparseBlock(tf.keras.Model):
 
     self.bn = tf.keras.layers.BatchNormalization()
 
-  @tf.function
+  @tf.function(experimental_relax_shapes=True)
   def call(self, inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training):
     mlp_out = self.mlp(inputs)
     mlp_out = self.bn_mlp(mlp_out, training=training)
@@ -263,7 +260,7 @@ class PVConvBlock(tf.keras.Model):
     self.bn_conv1 = tf.keras.layers.BatchNormalization()
     self.bn_conv2 = tf.keras.layers.BatchNormalization()
 
-  # @tf.function
+  @tf.function(experimental_relax_shapes=True)
   def call(self, inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training):
     mlp_out = self.mlp(inputs)
     mlp_out = self.bn_mlp(mlp_out, training=training)
@@ -311,19 +308,24 @@ class PVConvKerasModel(tf.keras.Model):
       self.local_pvconv1 = PVConvBlock(64*channel_mult)
       self.pvconv2 = PVConvBlock(128*channel_mult)
 
-    self.mlp3 = tf.keras.layers.Dense(64*channel_mult, activation='relu')
-    self.bn3 = tf.keras.layers.BatchNormalization()
+    # self.local_mlp1 = tf.keras.layers.Dense(64*channel_mult, activation='relu')
+    # self.bn1 = tf.keras.layers.BatchNormalization()
+    self.mlp2 = tf.keras.layers.Dense(128*channel_mult, activation='relu')
+    self.bn2 = tf.keras.layers.BatchNormalization()
 
-    self.mlp4 = tf.keras.layers.Dense(512, activation='relu')
+
+    self.mlp3 = tf.keras.layers.Dense(512*channel_mult, activation='relu')
+    self.bn3 = tf.keras.layers.BatchNormalization()
+    self.mlp4 = tf.keras.layers.Dense(512*channel_mult, activation='relu')
     self.bn4 = tf.keras.layers.BatchNormalization()
-    self.mlp5 = tf.keras.layers.Dense(256, activation='relu')
+    self.mlp5 = tf.keras.layers.Dense(256*channel_mult, activation='relu')
     self.bn5 = tf.keras.layers.BatchNormalization()
-    self.mlp6 = tf.keras.layers.Dense(128, activation='relu')
+    self.mlp6 = tf.keras.layers.Dense(128*channel_mult, activation='relu')
     self.bn6 = tf.keras.layers.BatchNormalization()
 
     self.final_mlp = tf.keras.layers.Dense(num_classes)
       
-  @tf.function
+  @tf.function(experimental_relax_shapes=True)
   def call(self, inputs, training=False):
     inputs = tf.ensure_shape(inputs, (1, None, 3))
     pt_coords = inputs
@@ -338,13 +340,16 @@ class PVConvKerasModel(tf.keras.Model):
     # Local features shape: 1 x n x 64
     local_features = self.local_pvconv1(
             inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
+    # # to shape 1 x n x 128
+    # x = self.pvconv2(
+    #     local_features, pt_coords, voxel_indexes, pts_per_voxel_inv,
+    #     training=training)
+
     # to shape 1 x n x 128
-    x = self.pvconv2(
-        local_features, pt_coords, voxel_indexes, pts_per_voxel_inv,
-        training=training)
+    x = self.mlp2(local_features)
+    x = self.bn2(x, training=training)
+
     # to shape 1 x n x 1024
-    # x = self.pvconv3(
-    #     x, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
     x = self.mlp3(x)
     x = self.bn3(x, training=training)
     # 1 x n x 1024 --> 1 x 1 x 1024
@@ -371,14 +376,14 @@ class PVConvKerasModel(tf.keras.Model):
 
 class PVConvModel:
   def __init__(self, num_classes: int, sparse_type: SparseType,
-      checkpoint_dir: str):
+      checkpoint_dir: str, iou_only_epoch: int):
     self.checkpoint_dir = checkpoint_dir
     self.model = PVConvKerasModel(num_classes, sparse_type)
     loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     self.model.compile(optimizer='adam',
         loss=loss_fn,
         metrics = [metrics.MeanIOUFromLogits(
-                   num_classes=num_classes)])
+                   num_classes=num_classes, only_epoch=iou_only_epoch)])
     self.epoch = util.LoadLatestCheckpoint(self.model, checkpoint_dir)
 
   def train(
@@ -398,9 +403,7 @@ class PVConvModel:
   def predict(self, x: tf.Tensor) -> tf.Tensor:
     return self.model(x)
 
-  def eval(self, dataset: tf.data.Dataset) -> List[float]:
+  def eval(self, dataset: tf.data.Dataset, steps: int) -> List[float]:
     """Compute IOU for the dataset."""
-    metrics = self.model.evaluate(dataset)
-    print(self.model.metric_names)
-    return metrics[1:]  # skip loss and only keep iou?
-
+    metrics = self.model.evaluate(dataset, steps=steps)
+    return metrics[1:] 
