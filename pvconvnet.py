@@ -1,3 +1,5 @@
+# Based on https://proceedings.neurips.cc/paper/2019/file/5737034557ef5b8c02c0e46513b98f90-Paper.pdf
+# and some ideas from https://torchsparse.mit.edu/assets/paper.pdf
 import constants as const
 from enum import Enum
 import math
@@ -215,7 +217,6 @@ class SparseConv3D(tf.keras.layers.Layer):
         trainable=True)
     
   def call(self, inputs, voxel_idx, weight_idx_to_input_idxs):
-    # tf.print(tf.reduce_sum(self.kernel[1, 0, 2]))
     if self.symm_opt:
       voxel_features = sparse_conv3d_symm(
           voxel_idx, inputs, self.kernel, weight_idx_to_input_idxs)
@@ -252,7 +253,6 @@ class PVConvSparseBlock(tf.keras.Model):
        name='scatter_to_voxels')
     voxels = voxels * pts_per_voxel_inv[0]
     voxel_idx, voxel_features = to_sparse(voxels)
-    # voxel_features = tf.ensure_shape(voxel_features, (None, 3))
     voxel_idx = tf.ensure_shape(voxel_idx, (None, 3))
 
     if self.symm_opt:
@@ -342,16 +342,11 @@ class PVConvKerasModel(tf.keras.Model):
 
     if sparse_type == SparseType.SPARSE_BASIC:
       self.local_pvconv1 = PVConvSparseBlock(64*channel_mult, symm_opt=False)
-      self.pvconv2 = PVConvSparseBlock(128*channel_mult, symm_opt=False)
     elif sparse_type == SparseType.SPARSE_SYMM:
       self.local_pvconv1 = PVConvSparseBlock(64*channel_mult)
-      self.pvconv2 = PVConvSparseBlock(128*channel_mult)
     else:
       self.local_pvconv1 = PVConvBlock(64*channel_mult)
-      self.pvconv2 = PVConvBlock(128*channel_mult)
 
-    # self.local_mlp1 = tf.keras.layers.Dense(64*channel_mult, activation='relu')
-    # self.bn1 = tf.keras.layers.BatchNormalization()
     self.mlp2 = tf.keras.layers.Dense(128*channel_mult, activation='relu')
     self.bn2 = tf.keras.layers.BatchNormalization()
 
@@ -382,10 +377,6 @@ class PVConvKerasModel(tf.keras.Model):
     # Local features shape: 1 x n x 64
     local_features = self.local_pvconv1(
             inputs, pt_coords, voxel_indexes, pts_per_voxel_inv, training=training)
-    # # to shape 1 x n x 128
-    # x = self.pvconv2(
-    #     local_features, pt_coords, voxel_indexes, pts_per_voxel_inv,
-    #     training=training)
 
     # to shape 1 x n x 128
     x = self.mlp2(local_features)

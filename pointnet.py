@@ -1,3 +1,4 @@
+# Based on https://arxiv.org/pdf/1612.00593.pdf but missing normalization.
 import metrics
 import os
 import tensorflow as tf
