@@ -82,8 +82,8 @@ def RecordToPointsAndLabels(record):
 # points: (N x 3) 3D cartesian coordinates for each point in the point cloud.
 # label: (N) per-point labels.
 # Note that the number of points can vary between examples.
-def GetDataset(file_pattern: str) -> tf.data.Dataset:
-  file_dataset = tf.data.Dataset.list_files(file_pattern)
+def GetDataset(file_pattern: str, deterministic: bool = False) -> tf.data.Dataset:
+  file_dataset = tf.data.Dataset.list_files(file_pattern, shuffle=not deterministic)
   dataset = tf.data.TFRecordDataset(file_dataset, compression_type='')
   dataset = dataset.map(
       lambda record:
@@ -93,4 +93,9 @@ def GetDataset(file_pattern: str) -> tf.data.Dataset:
   dataset = dataset.filter(HasSegmentationLabels)
   # Using batch sizes of 1 because examples have variable number of points.
   dataset = dataset.batch(1)
+
+  if deterministic:
+    options = tf.data.Options()
+    options.experimental_deterministic = True
+    dataset = dataset.with_options(options)
   return dataset

@@ -5,7 +5,10 @@ import numpy as np
 import os
 import pointnet
 import pvconvnet
+import tensorflow as tf
 import time
+
+tf.random.set_seed(123)
 
 def example_eval(model, x, y):
   start_time = time.time()
@@ -46,14 +49,15 @@ def benchmark_model(model, dataset, steps, model_metric_dir):
   np.save(times_file, times)
 
 def eval_and_benchmark(model, dataset, steps, model_metric_dir):
-  # eval_model(model, dataset, steps)
+  eval_model(model, dataset, steps)
   benchmark_model(model, dataset, steps, model_metric_dir)
 
 def evaluate(
     model_name: str, checkpoint_dir: str, eval_metric_dir: str, steps: int):
   # test_dataset = data.GetDataset(constants.TEST_DATA_PATTERN)
   # Test dataset reading hangs somehow, using validation dataset instead for now.
-  test_dataset = data.GetDataset(constants.VALIDATION_DATA_PATTERN)
+  test_dataset = data.GetDataset(
+      constants.VALIDATION_DATA_PATTERN, deterministic=True)
   model_cp_dir = os.path.join(checkpoint_dir, model_name)
   model_metric_dir = os.path.join(eval_metric_dir, model_name)
   os.makedirs(model_metric_dir, exist_ok=True)
