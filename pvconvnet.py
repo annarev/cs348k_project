@@ -178,7 +178,7 @@ def sparse_conv3d_symm(voxel_idx, voxel_features, weights, weight_idx_to_input_i
 
 @tf.function(experimental_relax_shapes=True)
 def pts_to_voxel_indexes(pt_coords):
-  voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5
+  voxel_idx = (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV
   voxel_idx = tf.dtypes.cast(voxel_idx, tf.int32)
   # voxel_idx = tf.ensure_shape(voxel_idx, (1, None, 3))
   return voxel_idx
@@ -280,7 +280,7 @@ class PVConvSparseBlock(tf.keras.Model):
     # The size of the grid is x VOXEL_SIZE_INV relative to original coords.
     vox_out = interpolation.trilinear.interpolate(
         conv_out,
-        pt_coords * VOXEL_SIZE_INV)
+        (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5)
     # Fuse per-point MLP and voxel conv outputs using addition.
     pv_out = mlp_out + vox_out
     return pv_out
@@ -330,7 +330,7 @@ class PVConvBlock(tf.keras.Model):
     # features.
     vox_out = interpolation.trilinear.interpolate(
         conv_out,
-        pt_coords * VOXEL_SIZE_INV)
+        (pt_coords - MIN_CORNER) * VOXEL_SIZE_INV - 0.5)
     # Fuse per-point MLP and voxel conv outputs using addition.
     pv_out = mlp_out + vox_out
     return pv_out
@@ -416,7 +416,9 @@ class PVConvModel:
     self.model.compile(optimizer='adam',
         loss=loss_fn,
         metrics = [metrics.MeanIOUFromLogits(
-                   num_classes=num_classes, only_epoch=iou_only_epoch)])
+                   num_classes=num_classes, only_epoch=iou_only_epoch),
+                   tf.keras.metrics.SparseCategoricalAccuracy()
+                   ])
     self.epoch = util.LoadLatestCheckpoint(self.model, checkpoint_dir)
 
   def train(
@@ -431,12 +433,13 @@ class PVConvModel:
         train_dataset, epochs=epochs, # validation_data=val_dataset,
         callbacks=[tensorboard_callback, checkpoint_callback, metrics.ToggleMetrics()],
         initial_epoch=self.epoch,
-        steps_per_epoch=steps_per_epoch)
+        steps_per_epoch=steps_per_epoch,
+        verbose=0)
 
   def predict(self, x: tf.Tensor) -> tf.Tensor:
     return self.model(x)
 
   def eval(self, dataset: tf.data.Dataset, steps: int) -> List[float]:
-    """Compute IOU for the dataset."""
-    metrics = self.model.evaluate(dataset, steps=steps)
+    """Compute IOU and Accuracy for the dataset."""
+    metrics = self.model.evaluate(dataset, steps=steps, verbose=0)
     return metrics[1:] 

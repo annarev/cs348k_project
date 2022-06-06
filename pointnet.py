@@ -65,7 +65,8 @@ class PointNetModel:
     self.model.compile(optimizer='adam',
         loss=loss_fn,
         metrics = [metrics.MeanIOUFromLogits(
-                   num_classes=num_classes, only_epoch=iou_only_epoch)])
+                   num_classes=num_classes, only_epoch=iou_only_epoch),
+                   tf.keras.metrics.SparseCategoricalAccuracy()])
     self.epoch = util.LoadLatestCheckpoint(self.model, checkpoint_dir)
 
   def train(
